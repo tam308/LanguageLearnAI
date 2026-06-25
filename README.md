@@ -6,7 +6,7 @@ This bot was built to facilitate easy language learning utilising google's genai
 
 - `/start` - Start the bot
 - `/profile` - Configure your profile information. Information given will be appended to the AI's system instructions.
-- `/anki` - Give you 5 random entries from your anki deck.
+- `/anki` - Gives you 5 random entries from your anki deck.
 
 ## Setup
 
@@ -46,3 +46,5 @@ The bot restarts itself if it crashes, so it will keep running until you stop it
 ## Notes
 
 AI may not be accurate, so take conversational grammar or corrections with a grain of salt.
+The format of the Anki deck CSV may vary from deck to deck. If your columns don't line up, adjust the `WORD_COLUMN`, `DEFINITION_COLUMN`, `EXAMPLE_SENTENCE_COLUMN` and `TRANSLATION_COLUMN` values at the top of `languagelearn_AI.py`.
+The daily reminder time and timezone are also configurable at the top of `languagelearn_AI.py`.

@@ -1,17 +1,18 @@
-import os
-import io
-import logging
-import json
+import asyncio
 import datetime
+import io
+import json
+import logging
+import os
+import time
+
 import pandas as pd
 import pytz
 from dotenv import load_dotenv
-from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, filters, MessageHandler
 from google import genai
 from google.genai import types
-import asyncio
-import time
+from telegram import Update
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters
 
 #resources
 #https://ai.google.dev/gemini-api/docs
@@ -26,6 +27,8 @@ TRANSLATION_COLUMN = 11    #the english translation of the example sentence
 TIMEZONE = "Asia/Singapore"
 #hour of the day to send the daily reminder, in 24 hour time
 REMINDER_HOUR = 5
+#max tokens the model can use per reply, this is a hard limit, so if the model is verbose it may cut off the reply before it finishes
+MAX_OUTPUT_TOKENS = 2000
 
 #pull the API keys from the .env file
 load_dotenv()
@@ -117,12 +120,12 @@ async def message_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     model = "gemini-flash-lite-latest"
     #build the system instruction, and append the saved profile so the model can personalize its responses
     system_instruction = [
-            types.Part.from_text(text=f"""You are a friendly, supportive male {BOT_LANGUAGE} friend to the user. Your primary goal is to maintain a natural, engaging conversation while gently aiding the user's Japanese learning journey.
+            types.Part.from_text(text=f"""You are a friendly, supportive male {BOT_LANGUAGE} friend to the user. Your primary goal is to maintain a natural, engaging conversation while gently aiding the user's {BOT_LANGUAGE} learning journey.
 
 Core Persona:
 - Your name is {BOT_NAME}.
 - You speak casually but grammatically correctly (e.g., standard plain form / dictionary form, casual polite forms when appropriate for a friend).
-- You are playful, warm, and have a good sense of humor. You text like a real friend chatting on LINE or any messaging app: expressive, relaxed, and fun, while still sounding like a normal, well-educated {BOT_AGE}-year-old university student in {BOT_LOCATION}. Avoid heavy anime or drama tropes.
+- You are playful, warm, and have a good sense of humor. You text like a real friend chatting on LINE or any messaging app: expressive, relaxed, and fun, while still sounding like a normal, well-educated {BOT_AGE}-year-old university student in {BOT_LOCATION}.
 - You tease gently and joke around, but you are always encouraging and never mean-spirited.
 - Your tone is warm, encouraging, and patient.
 - You respond primarily in {BOT_LANGUAGE}. You only use English when the user explicitly asks for an explanation of a complex grammar concept or cultural nuance that would be too difficult to explain in {BOT_LANGUAGE}.
@@ -137,7 +140,8 @@ LearnLM Educational Guidelines (STRICT):
 
 Formatting:
 - Keep your messages relatively short, typical of a Telegram text message (1-3 sentences).
-- If you must explain a concept in English, clearly separate it from the conversational {BOT_LANGUAGE}."""),
+- If you must explain a concept in English, clearly separate it from the conversational {BOT_LANGUAGE}.
+- When you want to separate distinct parts of your reply, such as a correction followed by a question, put each part on its own line with a line break between them. Each separated part is sent to the user as its own message, so keep one related thought per line."""),
     ]
     #add the additional language and personality rules if present
     language_rules = load_language_rules()
@@ -150,7 +154,7 @@ Formatting:
 
     generate_content_config = types.GenerateContentConfig(
         temperature=0.7,
-        max_output_tokens=500,
+        max_output_tokens=MAX_OUTPUT_TOKENS,
         thinking_config=types.ThinkingConfig(
             thinking_level="MEDIUM",
         ),
@@ -173,18 +177,28 @@ Formatting:
         )
         #send the user's message to the model and get the response
         response = await asyncio.to_thread(chat.send_message, message)
-        #send the telegram response
-        await update.message.reply_text(response.text or "Sorry, I couldn't generate a response at this time.")
-        #append this turn to the history and persist it
-        if response.text:
+        reply = response.text
+
+        #append this turn to the history and save it before we send anything back
+        if reply:
             records.append({"role": "user", "text": message})
-            records.append({"role": "model", "text": response.text})
+            records.append({"role": "model", "text": reply})
             if len(records) > 80:  #keep only the last 80 messages for context
                 records = records[-80:]
             save_history(records, "history.json")
 
             print(f"User: {message}")
-            print(f"{BOT_NAME}: {response.text}") #if failed response.text is blank
+            print(f"{BOT_NAME}: {reply}")
+
+        #send the reply back, the model may split it with line breaks so send each line as its own message
+        if reply:
+            for part in reply.split("\n"): #split into parts so its more natural like texting
+                part = part.strip()
+                if part: #dont accidentally send empty lines
+                    await update.message.reply_text(part)
+        else:
+            logging.warning("Model returned an empty response.")
+            await update.message.reply_text("Sorry, I couldn't generate a response at this time.")
 
     except Exception as e:
         logging.error(f"Error in message_command: {e}", exc_info=True)
