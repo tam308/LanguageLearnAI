@@ -1,10 +1,13 @@
 import os
+import io
 import logging
 import json
+import datetime
+import pandas as pd
+import pytz
 from dotenv import load_dotenv
 from telegram import Update
-from telegram.error import Forbidden, BadRequest
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, filters, CallbackQueryHandler, MessageHandler
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, filters, MessageHandler
 from google import genai
 from google.genai import types
 import asyncio
@@ -12,6 +15,17 @@ import time
 
 #resources
 #https://ai.google.dev/gemini-api/docs
+
+#config for anki, these are the column positions in the Core 2000 export and they start from zero
+WORD_COLUMN = 2            #the vocab word with furigana, like 一[ひと]つ where the reading sits in brackets
+DEFINITION_COLUMN = 4      #the english meaning
+EXAMPLE_SENTENCE_COLUMN = 9   #example sentence with furigana, use 8 if you want the plain version without furigana
+TRANSLATION_COLUMN = 11    #the english translation of the example sentence
+
+#timezone for the daily anki reminder, you can use any IANA name like Asia/Singapore or Europe/London
+TIMEZONE = "Asia/Singapore"
+#hour of the day to send the daily reminder, in 24 hour time
+REMINDER_HOUR = 5
 
 #pull the API keys from the .env file
 load_dotenv()
@@ -24,12 +38,12 @@ BOT_AGE = os.getenv("BOT_AGE")
 BOT_LOCATION = os.getenv("BOT_LOCATION")
 
 #history management functions to load and save chat history to a JSON file
-#use utf-8 encoding to support non-ASCII characters in the chat history
+#use utf-8 text encoding so Japanese and other characters save properly
 def load_history(file_path):
     try:
         with open(file_path, "r", encoding="utf-8") as f:
             data = json.load(f)
-        #only accept a list; anything else like corrupted JSON is treated as empty history
+        #only accept a list, anything else like corrupted JSON is treated as empty history
         return data if isinstance(data, list) else []
     except (OSError, json.JSONDecodeError):
         return []
@@ -41,7 +55,7 @@ def save_history(history, file_path):
     except OSError as e:
         logging.error(f"Failed to save history to {file_path}: {e}")
 
-#load the user's plain-text profile, or an empty string if none has been saved yet
+#load the user's plain text profile, or an empty string if none has been saved yet
 def load_profile():
     try:
         with open("user_profile.txt", "r", encoding="utf-8") as f:
@@ -79,8 +93,8 @@ async def profile_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Please provide your profile information after the /profile command. For example:\n\n"
                                         f"/profile My name is Jason, I'm an expert {BOT_LANGUAGE} learner, and I want to improve my conversational skills. I like detective novels and playing games.")
         return
-    user_profile = "The following information was provided about the user:\n\n" + message
-    #save the user's profile information to a file
+    #save the user's raw profile text to a file (the framing label is added when it is loaded into the system instruction)
+    user_profile = message
     try:
         with open("user_profile.txt", "w", encoding="utf-8") as f:
             f.write(user_profile)
@@ -108,7 +122,7 @@ async def message_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 Core Persona:
 - Your name is {BOT_NAME}.
 - You speak casually but grammatically correctly (e.g., standard plain form / dictionary form, casual polite forms when appropriate for a friend).
-- You are playful, warm, and have a good sense of humor. You text like a real friend chatting on LINE: expressive, relaxed, and fun, while still sounding like a normal, well-educated {BOT_AGE}-year-old university student in {BOT_LOCATION}. Avoid heavy anime or drama tropes.
+- You are playful, warm, and have a good sense of humor. You text like a real friend chatting on LINE or any messaging app: expressive, relaxed, and fun, while still sounding like a normal, well-educated {BOT_AGE}-year-old university student in {BOT_LOCATION}. Avoid heavy anime or drama tropes.
 - You tease gently and joke around, but you are always encouraging and never mean-spirited.
 - Your tone is warm, encouraging, and patient.
 - You respond primarily in {BOT_LANGUAGE}. You only use English when the user explicitly asks for an explanation of a complex grammar concept or cultural nuance that would be too difficult to explain in {BOT_LANGUAGE}.
@@ -129,10 +143,10 @@ Formatting:
     language_rules = load_language_rules()
     if language_rules:
         system_instruction.append(types.Part.from_text(text=language_rules))
-    #read the user's saved profile and add it to the system instruction if present
+    #read the user's saved profile and add it to the system instruction (with a label so the model knows what it is)
     user_profile = load_profile()
     if user_profile:
-        system_instruction.append(types.Part.from_text(text=user_profile))
+        system_instruction.append(types.Part.from_text(text="The following information was provided about the user:\n\n" + user_profile))
 
     generate_content_config = types.GenerateContentConfig(
         temperature=0.7,
@@ -165,7 +179,7 @@ Formatting:
         if response.text:
             records.append({"role": "user", "text": message})
             records.append({"role": "model", "text": response.text})
-            if len(records) > 80:  # Keep only the last 80 messages for context
+            if len(records) > 80:  #keep only the last 80 messages for context
                 records = records[-80:]
             save_history(records, "history.json")
 
@@ -177,9 +191,50 @@ Formatting:
         try:
             await update.message.reply_text("Sorry, I encountered an error while processing your request.")
         except Exception:
-            pass  #ignore failures to send the error message (e.g. the user blocked the bot)
+            pass  #ignore failures to send the error message, like if the user has blocked the bot
         return
-    
+
+#manual command trigger for the Anki integration, which sends 5 random words from anki.csv to the user
+async def anki_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if context.job_queue is None:
+        await update.message.reply_text("Job queue is not available, so the Anki feature is disabled.")
+        return
+    context.job_queue.run_once(daily_reminder, when=0, data=update.effective_chat.id, name="anki_test")
+
+async def daily_reminder(context: ContextTypes.DEFAULT_TYPE) -> None:
+    #this runs the anki digest, the grace time lets it still fire if the bot was busy at the exact moment
+    user_id = context.job.data
+    context.job_queue.run_once(anki_integration, when=0, chat_id=user_id, data=user_id,
+                                job_kwargs={"misfire_grace_time": 60})
+        
+#give the user 5 random words from anki.csv, it prints the word, definition, example sentence and translation
+#these are sent as 5 separate messages so the user can easily copy one and ask the AI to explain it
+async def anki_integration(context: ContextTypes.DEFAULT_TYPE) -> None:
+    try:
+        await context.bot.send_message(chat_id=context.job.chat_id, text="Here are 5 random words from your Anki deck for you to study today:")
+        #the Anki export begins with metadata lines starting with '#' (and has no header row),
+        #so skip every '#' line (allowing leading " because some UIDs have it) so the data truly begins at the entries
+        with open("anki.csv", encoding="utf-8-sig") as f:
+            data_lines = [ln for ln in f if not ln.lstrip().lstrip('"').startswith("#")]
+        if not data_lines:
+            await context.bot.send_message(chat_id=context.job.chat_id, text="The Anki CSV file is empty or not found.")
+            return
+        df = pd.read_csv(io.StringIO("".join(data_lines)), header=None)
+        random_rows = df.sample(n=min(5, len(df)))  #pick up to 5 random entries
+        #send each word, definition, example sentence and its translation as a separate message
+        for idx, row in random_rows.iterrows():
+            word = row.iloc[WORD_COLUMN]
+            definition = row.iloc[DEFINITION_COLUMN]
+            example_sentence = row.iloc[EXAMPLE_SENTENCE_COLUMN]
+            translation = row.iloc[TRANSLATION_COLUMN]
+            await context.bot.send_message(chat_id=context.job.chat_id, text=f"Word: {word}\nDefinition: {definition}\nExample Sentence: {example_sentence}\nTranslation: {translation}")
+    except Exception as e:
+        logging.error(f"Error in anki_integration: {e}", exc_info=True)
+        try:
+            await context.bot.send_message(chat_id=context.job.chat_id, text="Sorry, I encountered an error while trying to send your Anki words.")
+        except Exception:
+            pass  #ignore failures to send the error message, like if the user has blocked the bot
+        return
 
 if __name__ == "__main__":
     #validate required environment variables up front so startup fails with a clear message, not a cryptic traceback
@@ -200,13 +255,20 @@ if __name__ == "__main__":
             #add command handlers (filters go inside CommandHandler, not on add_handler)
             app.add_handler(CommandHandler("start", start_command, filters=allowed_users))
             app.add_handler(CommandHandler("profile", profile_command, filters=allowed_users))
-            #all incoming non-command text messages go to the message handler
+            app.add_handler(CommandHandler("anki", anki_command, filters=allowed_users))
+            #all incoming text messages that are not commands go to the message handler
             app.add_handler(MessageHandler(allowed_users & filters.TEXT & ~filters.COMMAND, message_command))
 
+            #daily reminder in the early morning when there is least likely to be any traffic
+            if app.job_queue is not None:
+                reminder_time = datetime.time(hour=REMINDER_HOUR, minute=0, tzinfo=pytz.timezone(TIMEZONE))
+                app.job_queue.run_daily(daily_reminder, time=reminder_time, data=owner_id, name="daily_anki")
+            else:
+                logging.warning("Daily Anki reminder not available.")
             #start the bot
             print("LanguageLearnAI is running...")
             app.run_polling()
-            break  #run_polling returned normally (e.g. Ctrl+C) -> intentional shutdown, don't restart
+            break  #intentional shutdown, exit the loop
         except KeyboardInterrupt:
             print("Bot stopped by user.")
             break
