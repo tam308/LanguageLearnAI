@@ -1,0 +1,5 @@
+.env
+history.json
+user_profile.txt
+additional_language_rules.txt
+__pycache__/
