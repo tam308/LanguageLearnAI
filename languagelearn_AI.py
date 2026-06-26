@@ -4,14 +4,15 @@ import io
 import json
 import logging
 import os
+import random
 import time
-
 import pandas as pd
 import pytz
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 from telegram import Update
+from telegram.error import BadRequest, NetworkError
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters
 
 #resources
@@ -29,6 +30,11 @@ TIMEZONE = "Asia/Singapore"
 REMINDER_HOUR = 5
 #max tokens the model can use per reply, this is a hard limit, so if the model is verbose it may cut off the reply before it finishes
 MAX_OUTPUT_TOKENS = 2000
+#chance from 0 to 1 that a normal reply is nudged to be short and quick like a real text, this keeps casual chat feeling human
+SHORT_REPLY_CHANCE = 0.4
+#how many times to try sending a telegram message before giving up, and how many seconds to wait between tries
+MAX_TELEGRAM_SEND_RETRY = 10
+MAX_TELEGRAM_RETRY_DELAY = 10
 
 #pull the API keys from the .env file
 load_dotenv()
@@ -101,12 +107,28 @@ async def profile_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         with open("user_profile.txt", "w", encoding="utf-8") as f:
             f.write(user_profile)
+        logging.warning("User profile saved to user_profile.txt")
     except OSError as e:
         logging.error(f"Failed to save profile: {e}")
         await update.message.reply_text("Sorry, I couldn't save your profile right now. Please try again.")
         return
 
     await update.message.reply_text("Thanks! Your profile information has been saved. I will use this information to tailor our conversations to your needs.")
+
+#send a telegram message, if the proxy or network drops we wait and try again, this happens often on hosts like PythonAnywhere
+async def send_with_retry(target_message, text, attempts=MAX_TELEGRAM_SEND_RETRY, delay=MAX_TELEGRAM_RETRY_DELAY):
+    for attempt in range(attempts):
+        try:
+            await target_message.reply_text(text)
+            return
+        except BadRequest:
+            raise  #a malformed request will not fix itself so do not retry it
+        except NetworkError as e:
+            if attempt < attempts - 1:
+                logging.warning(f"Telegram send failed, retrying in {delay} seconds: {e}")
+                await asyncio.sleep(delay)
+            else:
+                logging.error(f"Gave up sending a telegram message after {attempts} attempts: {e}")
 
 #The message command handler that processes incoming messages, sends them to the Gemini API for response generation, and replies back to the user
 async def message_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -139,9 +161,9 @@ LearnLM Educational Guidelines (STRICT):
    - When correcting, do so smoothly and encouragingly. (e.g., \"Ah, you mean [Corrected {BOT_LANGUAGE}]? Yeah, I agree!\"). Do not sound like a textbook or a strict teacher. 
 
 Formatting:
-- Keep your messages relatively short, typical of a Telegram text message (1-3 sentences).
-- If you must explain a concept in English, clearly separate it from the conversational {BOT_LANGUAGE}.
-- When you want to separate distinct parts of your reply, such as a correction followed by a question, put each part on its own line with a line break between them. Each separated part is sent to the user as its own message, so keep one related thought per line."""),
+- For normal back and forth conversation, reply like a real person texting: usually just one short message, and two at the very most. Do not split casual chitchat into many messages, it feels spammy and unnatural.
+- Only when you are giving a fuller explanation or a correction followed by a separate question should you use multiple messages. In that case, put each distinct part on its own line with a line break between them, and each part is sent to the user as its own message.
+- If you must explain a concept in English, clearly separate it from the conversational {BOT_LANGUAGE}."""),
     ]
     #add the additional language and personality rules if present
     language_rules = load_language_rules()
@@ -151,6 +173,10 @@ Formatting:
     user_profile = load_profile()
     if user_profile:
         system_instruction.append(types.Part.from_text(text="The following information was provided about the user:\n\n" + user_profile))
+
+    #sometimes nudge the model to keep a normal reply short and quick so the bot feels like a real person texting
+    if random.random() < SHORT_REPLY_CHANCE:
+        system_instruction.append(types.Part.from_text(text="For this reply only, if this is just casual conversation, answer in a very short and quick way like a real person texting, sometimes only a few words, and do not ask a follow up question. If the user is asking for help, a correction, or an explanation, ignore this and reply normally and fully."))
 
     generate_content_config = types.GenerateContentConfig(
         temperature=0.7,
@@ -170,6 +196,7 @@ Formatting:
 
     #create a new chat session with the model and send the user's message to it, then reply with the model's response
     try:
+        logging.warning("Message received by model... Generating...") #warning so it shows up
         chat = client.chats.create(
             model=model,
             config=generate_content_config,
@@ -195,13 +222,13 @@ Formatting:
             for part in reply.split("\n"): #split into parts so its more natural like texting
                 part = part.strip()
                 if part: #dont accidentally send empty lines
-                    await update.message.reply_text(part)
+                    await send_with_retry(update.message, part)
         else:
             logging.warning("Model returned an empty response.")
-            await update.message.reply_text("Sorry, I couldn't generate a response at this time.")
+            await send_with_retry(update.message, "Sorry, I couldn't generate a response at this time.")
 
     except Exception as e:
-        logging.error(f"Error in message_command: {e}", exc_info=True)
+        logging.error(f"Error in message_command: {e}")
         try:
             await update.message.reply_text("Sorry, I encountered an error while processing your request.")
         except Exception:
@@ -260,6 +287,12 @@ if __name__ == "__main__":
         owner_id = int(OWNER)
     except ValueError:
         raise SystemExit("OWNER must be a numeric Telegram user ID")
+
+    #log once at startup whether the optional language rules file was found
+    if load_language_rules():
+        logging.warning("Loaded additional language rules from additional_language_rules.txt")
+    else:
+        logging.warning("No additional language rules file found, continuing without it")
 
     #keep the bot alive if polling ever crashes unexpectedly, log it and restart after a short delay
     while True:
