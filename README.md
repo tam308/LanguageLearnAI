@@ -41,7 +41,7 @@ Use https://jspann21.github.io/anki_excel_tool/, your csv file should mirror the
 python languagelearn_AI.py
 ```
 
-The bot restarts itself if it crashes, so it will keep running until you stop it. Once it is up, message it on Telegram to start chatting. A digest of 5 random Anki words is also sent automatically every day at 5:00 AM (Asia/Singapore), and you can request one any time with `/anki`.
+The bot restarts itself if it crashes, so it will keep running until you stop it. Once it is up, message it on Telegram to start chatting. A digest of 5 random Anki words is also sent automatically every day at 5:00 AM (GMT +8), and you can request one any time with `/anki`.
 
 ## Notes
 
