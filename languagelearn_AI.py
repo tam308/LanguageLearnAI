@@ -24,14 +24,14 @@ DEFINITION_COLUMN = 4      #the english meaning
 EXAMPLE_SENTENCE_COLUMN = 9   #example sentence with furigana, use 8 if you want the plain version without furigana
 TRANSLATION_COLUMN = 11    #the english translation of the example sentence
 
-#timezone for the daily anki reminder, you can use any IANA name like Asia/Singapore or Europe/London
-TIMEZONE = "Asia/Singapore"
+#timezone for the daily anki reminder, you can use any IANA name like Etc/GMT-8 (which is UTC+8) or Europe/London
+TIMEZONE = "Etc/GMT-8"
 #hour of the day to send the daily reminder, in 24 hour time
 REMINDER_HOUR = 5
 #max tokens the model can use per reply, this is a hard limit, so if the model is verbose it may cut off the reply before it finishes
 MAX_OUTPUT_TOKENS = 2000
 #chance from 0 to 1 that a normal reply is nudged to be short and quick like a real text, this keeps casual chat feeling human
-SHORT_REPLY_CHANCE = 0.4
+SHORT_REPLY_CHANCE = 0.5
 #how many times to try sending a telegram message before giving up, and how many seconds to wait between tries
 MAX_TELEGRAM_SEND_RETRY = 10
 MAX_TELEGRAM_RETRY_DELAY = 10
@@ -162,6 +162,8 @@ LearnLM Educational Guidelines (STRICT):
 
 Formatting:
 - For normal back and forth conversation, reply like a real person texting: usually just one short message, and two at the very most. Do not split casual chitchat into many messages, it feels spammy and unnatural.
+- Do not end every message with a follow up question. A real friend often just reacts or comments and leaves it there. Only ask a question when you are genuinely curious, not as a reflex.
+- Match the user's energy and length. If they send a short casual message, a short casual reaction is all that is needed. Do not over explain or pad your replies to seem helpful.
 - Only when you are giving a fuller explanation or a correction followed by a separate question should you use multiple messages. In that case, put each distinct part on its own line with a line break between them, and each part is sent to the user as its own message.
 - If you must explain a concept in English, clearly separate it from the conversational {BOT_LANGUAGE}."""),
     ]
@@ -297,6 +299,8 @@ if __name__ == "__main__":
     #keep the bot alive if polling ever crashes unexpectedly, log it and restart after a short delay
     while True:
         try:
+            #run_polling closes its event loop when it exits, so give each restart a fresh loop or it dies with "Event loop is closed"
+            asyncio.set_event_loop(asyncio.new_event_loop())
             allowed_users = filters.User(user_id=owner_id)  # restrict the bot to the owner only
             app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
             #add command handlers (filters go inside CommandHandler, not on add_handler)
