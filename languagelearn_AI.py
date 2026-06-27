@@ -36,10 +36,10 @@ SHORT_REPLY_CHANCE = 0.5
 MAX_TELEGRAM_SEND_RETRY = 10
 MAX_TELEGRAM_RETRY_DELAY = 10
 #the bot reaches out on its own only after the chat has been quiet for this many hours
-ENGAGEMENT_QUIET_HOURS = 3   #TEMP FOR TESTING, real value is 10
+ENGAGEMENT_QUIET_HOURS = 3
 #the recurring engagement job waits a random number of hours in this range before checking in again
-MIN_ENGAGEMENT_HOURS = 1     #TEMP FOR TESTING, real value is 4
-MAX_ENGAGEMENT_HOURS = 3     #TEMP FOR TESTING, real value is 12
+MIN_ENGAGEMENT_HOURS = 1
+MAX_ENGAGEMENT_HOURS = 3
 #only reach out during these waking hours in 24 hour time, so the bot never texts in the middle of the night
 ENGAGEMENT_START_HOUR = 8
 ENGAGEMENT_END_HOUR = 23
@@ -304,7 +304,7 @@ async def anki_integration(context: ContextTypes.DEFAULT_TYPE) -> None:
             translation = row.iloc[TRANSLATION_COLUMN]
             await send_with_retry(context.bot, context.job.chat_id, f"Word: {word}\nDefinition: {definition}\nExample Sentence: {example_sentence}\nTranslation: {translation}")
     except Exception as e:
-        logging.error(f"Error in anki_integration: {e}", exc_info=True)
+        logging.error(f"Error in anki_integration: {e}")
         try:
             await send_with_retry(context.bot, context.job.chat_id, "Sorry, I encountered an error while trying to send your Anki words.")
         except Exception:
@@ -433,5 +433,5 @@ if __name__ == "__main__":
             print("Bot stopped by user.")
             break
         except Exception as e:
-            logging.error(f"Polling crashed, restarting in 5 seconds: {e}", exc_info=True)
+            logging.error(f"Polling crashed, restarting in 5 seconds: {e}")
             time.sleep(5)
