@@ -244,8 +244,8 @@ async def message_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 records = records[-80:]
             save_history(records, "history.json")
 
-            print(f"User: {message}")
-            print(f"{BOT_NAME}: {reply}")
+            logging.warning(f"User: {message}")
+            logging.warning(f"{BOT_NAME}: {reply}")
 
         #send the reply back, the model may split it with line breaks so send each line as its own message
         if reply:
@@ -276,6 +276,7 @@ async def anki_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def daily_reminder(context: ContextTypes.DEFAULT_TYPE) -> None:
     #this runs the anki digest, the grace time lets it still fire if the bot was busy at the exact moment
     user_id = context.job.data
+    logging.warning(f"Running daily Anki reminder for user {user_id}")
     context.job_queue.run_once(anki_integration, when=0, chat_id=user_id, data=user_id,
                                 job_kwargs={"misfire_grace_time": 60})
     #daily failsafe, restart the engagement chain if it ever dropped, otherwise leave the pending one be
@@ -297,6 +298,7 @@ async def anki_integration(context: ContextTypes.DEFAULT_TYPE) -> None:
         df = pd.read_csv(io.StringIO("".join(data_lines)), header=None)
         random_rows = df.sample(n=min(5, len(df)))  #pick up to 5 random entries
         #send each word, definition, example sentence and its translation as a separate message
+        logging.warning(f"Sending {len(random_rows)} random Anki words to user {context.job.chat_id}")
         for idx, row in random_rows.iterrows():
             word = row.iloc[WORD_COLUMN]
             definition = row.iloc[DEFINITION_COLUMN]
@@ -317,6 +319,7 @@ def schedule_next_engagement(job_queue, user_id):
         job.schedule_removal()
     delay_hours = random.uniform(MIN_ENGAGEMENT_HOURS, MAX_ENGAGEMENT_HOURS)
     job_queue.run_once(random_engagement, when=delay_hours * 3600, data=user_id, name="engagement_chain")
+    logging.warning(f"Scheduled next engagement check in {delay_hours:.2f} hours.")
 
 #text the user out of the blue like a real friend would, to keep them engaged and practicing
 #only reaches out once the chat has been quiet for a while, then lines up its own next check in
@@ -365,6 +368,7 @@ async def random_engagement(context: ContextTypes.DEFAULT_TYPE) -> None:
             if reply:
                 reply = reply.strip()
                 await send_with_retry(context.bot, user_id, reply)
+                logging.warning(f"Random engagement message sent to user {user_id}: {reply}")
                 #save the placeholder as a user turn and our reply as a model turn, so history keeps alternating and continues from here
                 records.append({"role": "user", "text": placeholder})
                 records.append({"role": "model", "text": reply})
