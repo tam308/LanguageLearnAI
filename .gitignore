@@ -5,3 +5,4 @@ additional_language_rules.txt
 anki.csv
 __pycache__/
 home_server_instructions.md
+Docker_setup.md
