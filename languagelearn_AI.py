@@ -35,6 +35,8 @@ SHORT_REPLY_CHANCE = 0.5
 #how many times to try sending a telegram message before giving up, and how many seconds to wait between tries
 MAX_TELEGRAM_SEND_RETRY = 10
 MAX_TELEGRAM_RETRY_DELAY = 10
+#set to False to turn off the bot texting the user on its own, flip back to True to re-enable it
+ENGAGEMENT_ENABLED = False
 #the bot reaches out on its own only after the chat has been quiet for this many hours
 ENGAGEMENT_QUIET_HOURS = 3
 #the recurring engagement job waits a random number of hours in this range before checking in again
@@ -276,7 +278,6 @@ async def anki_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def daily_reminder(context: ContextTypes.DEFAULT_TYPE) -> None:
     #this runs the anki digest, the grace time lets it still fire if the bot was busy at the exact moment
     user_id = context.job.data
-    logging.warning(f"Running daily Anki reminder for user {user_id}")
     context.job_queue.run_once(anki_integration, when=0, chat_id=user_id, data=user_id,
                                 job_kwargs={"misfire_grace_time": 60})
     #daily failsafe, restart the engagement chain if it ever dropped, otherwise leave the pending one be
@@ -315,6 +316,9 @@ async def anki_integration(context: ContextTypes.DEFAULT_TYPE) -> None:
 
 #line up the next proactive check in at a random gap, replacing any pending one so the chain never stacks up
 def schedule_next_engagement(job_queue, user_id):
+    if not ENGAGEMENT_ENABLED:
+        logging.warning("Random engagement is disabled, not scheduling a check in.")
+        return
     for job in job_queue.get_jobs_by_name("engagement_chain"):
         job.schedule_removal()
     delay_hours = random.uniform(MIN_ENGAGEMENT_HOURS, MAX_ENGAGEMENT_HOURS)
