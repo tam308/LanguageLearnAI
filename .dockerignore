@@ -1,0 +1,13 @@
+#venv + cache
+tele-bot/
+__pycache__/
+*.pyc
+.git/
+
+#secrets and personal data - passed in at runtime by start_bot.sh, never baked into the image
+.env
+history.json
+anki.csv
+user_profile.txt
+additional_language_rules.txt
+*.md

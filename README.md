@@ -43,6 +43,16 @@ python languagelearn_AI.py
 
 The bot restarts itself if it crashes, so it will keep running until you stop it. Once it is up, message it on Telegram to start chatting. A digest of 5 random Anki words is also sent automatically every day at 5:00 AM (GMT +8), and you can request one any time with `/anki`.
 
+## Run with Docker
+
+The bot can also run in Docker, which keeps it running in the background and restarts it after a crash or reboot. You need [Docker](https://docs.docker.com/engine/install/) installed.
+
+```bash
+./start_bot.sh
+```
+
+This builds the image and starts the bot. `.env` and your data files (`history.json`, `anki.csv`, `user_profile.txt`, `additional_language_rules.txt`) stay outside the image: the script passes them in when the bot starts. Run the script again after changing the code or `.env`. Logs: `docker logs -f running-lang-bot`.
+
 ## Notes
 
 AI may not be accurate, so take conversational grammar or corrections with a grain of salt.
